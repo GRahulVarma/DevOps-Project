@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Encryption and Decryption of passwords</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .container { max-width: 800px; margin: auto; padding: 20px; border: 1px solid #ddd; border-radius: 8px; box-shadow: 2px 2px 8px rgba(0,0,0,0.1); }
+        textarea, input[type="text"], input[type="password"] {
+            width: 100%; padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px;
+            box-sizing: border-box; /* Include padding in width */
+        }
+        button {
+            padding: 10px 15px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;
+            margin-right: 10px;
+        }
+        button:hover { background-color: #0056b3; }
+        .result-box {
+            background-color: #f0f0f0; padding: 10px; border-radius: 4px; min-height: 50px; word-break: break-all;
+            margin-top: 15px;
+        }
+        h2, h3 { color: #333; }
+        .warning { color: red; font-weight: bold; margin-top: 20px; padding: 10px; border: 1px solid red; border-radius: 5px; }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h2>Client-Side Encryption/Decryption (Web Crypto API)</h2>
+<!--       
+ <div class="warning">
+            <h3>&#x26A0; CRITICAL SECURITY WARNING &#x26A0;</h3>
+            <p><strong>DO NOT USE THIS FOR STORING USER LOGIN PASSWORDS.</strong> This code demonstrates reversible encryption, meaning the original data can be recovered. For user passwords, you must use **one-way hashing** (e.g., Bcrypt, Argon2) performed on a secure **server-side** to ensure they cannot be decrypted even if your database is compromised.</p>
+            <p>Any encryption key or decryption logic present in client-side (HTML/JavaScript) code is easily discoverable by an attacker, making it insecure for sensitive data that needs long-term protection.</p>
+        </div>
+-->
+        <h3>Encryption</h3>
+        <label for="plaintextInput">Text to Encrypt:</label>
+        <textarea id="plaintextInput" rows="4" placeholder="Enter text to encrypt..."></textarea>
+
+        <label for="encryptionKeyInput">Encryption Key (HEX - 32, 48, or 64 chars for AES-128, 192, 256):</label>
+        <input type="text" id="encryptionKeyInput" placeholder="Leave empty to generate random key">
+        <button onclick="generateAndSetKey()">Generate Random Key</button>
+
+        <button onclick="encryptText()">Encrypt Text</button>
+
+        <p>Encrypted Output (Base64 Encoded - Includes Nonce and Tag):</p>
+        <div id="encryptedOutput" class="result-box"></div>
+
+        <h3>Decryption</h3>
+        <label for="decryptInput">Encrypted Text (Base64):</label>
+        <textarea id="decryptInput" rows="4" placeholder="Paste encrypted text here..."></textarea>
+
+        <label for="decryptionKeyInput">Decryption Key (HEX - Must match encryption key):</label>
+        <input type="text" id="decryptionKeyInput" placeholder="Paste encryption key here">
+
+        <button onclick="decryptText()">Decrypt Text</button>
+
+        <p>Decrypted Output:</p>
+        <div id="decryptedOutput" class="result-box"></div>
+    </div>
+
+    <script>
+        // Helper to convert ArrayBuffer to Hex String
+        function arrayBufferToHex(buffer) {
+            return Array.from(new Uint8Array(buffer))
+                .map(b => b.toString(16).padStart(2, '0'))
+                .join('');
+        }
+
+        // Helper to convert Hex String to ArrayBuffer
+        function hexToArrayBuffer(hexString) {
+            if (hexString.length % 2 !== 0) {
+                throw new Error("Hex string must have an even number of characters.");
+            }
+            const bytes = new Uint8Array(hexString.length / 2);
+            for (let i = 0; i < hexString.length; i += 2) {
+                bytes[i / 2] = parseInt(hexString.substr(i, 2), 16);
+            }
+            return bytes.buffer;
+        }
+
+        // Helper to convert ArrayBuffer to Base64 String
+        function arrayBufferToBase64(buffer) {
+            return btoa(String.fromCharCode(...new Uint8Array(buffer)));
+        }
+
+        // Helper to convert Base64 String to ArrayBuffer
+        function base64ToArrayBuffer(base64) {
+            const binary_string = atob(base64);
+            const len = binary_string.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {
+                bytes[i] = binary_string.charCodeAt(i);
+            }
+            return bytes.buffer;
+        }
+
+        async function generateAndSetKey() {
+            // Generate a 256-bit (32-byte) AES key
+            const key = await crypto.subtle.generateKey(
+                { name: "AES-GCM", length: 256 },
+                true, // extractable
+                ["encrypt", "decrypt"]
+            );
+
+            // Export key to JWK format (JSON Web Key)
+            const exportedKey = await crypto.subtle.exportKey("jwk", key);
+
+            // The 'k' field in JWK is the base64url encoded key. Convert it to hex.
+            const rawKeyBytes = base64ToArrayBuffer(exportedKey.k.replace(/-/g, '+').replace(/_/g, '/'));
+            const hexKey = arrayBufferToHex(rawKeyBytes);
+
+            document.getElementById('encryptionKeyInput').value = hexKey;
+            document.getElementById('decryptionKeyInput').value = hexKey;
+        }
+
+        async function getKeyFromHex(hexKey) {
+            if (!hexKey) {
+                throw new Error("Encryption key is required.");
+            }
+            if (!/^[0-9a-fA-F]+$/.test(hexKey)) {
+                throw new Error("Key must be a valid hexadecimal string.");
+            }
+            if (hexKey.length !== 32 && hexKey.length !== 48 && hexKey.length !== 64) {
+                throw new Error("Key length must be 32 (AES-128), 48 (AES-192), or 64 (AES-256) hex characters.");
+            }
+
+            const rawKeyBytes = hexToArrayBuffer(hexKey);
+            const key = await crypto.subtle.importKey(
+                "raw",
+                rawKeyBytes,
+                { name: "AES-GCM" },
+                false, // not extractable
+                ["encrypt", "decrypt"]
+            );
+            return key;
+        }
+
+        async function encryptText() {
+            const plaintext = document.getElementById('plaintextInput').value;
+            const keyHex = document.getElementById('encryptionKeyInput').value;
+            const outputDiv = document.getElementById('encryptedOutput');
+
+            if (!plaintext) {
+                outputDiv.textContent = "Please enter text to encrypt.";
+                return;
+            }
+
+            try {
+                const key = await getKeyFromHex(keyHex);
+
+                const iv = crypto.getRandomValues(new Uint8Array(16)); // 16 bytes for AES-GCM IV (Initialization Vector)
+                const encoded = new TextEncoder().encode(plaintext);
+
+                const cipher = await crypto.subtle.encrypt(
+                    {
+                        name: "AES-GCM",
+                        iv: iv,
+                    },
+                    key,
+                    encoded
+                );
+
+                // Combine IV, ciphertext, and authentication tag for storage/transmission
+                // GCM produces ciphertext followed by the tag
+                const resultBuffer = new Uint8Array(iv.length + cipher.byteLength);
+                resultBuffer.set(iv, 0);
+                resultBuffer.set(new Uint8Array(cipher), iv.length);
+
+                outputDiv.textContent = arrayBufferToBase64(resultBuffer.buffer);
+            } catch (error) {
+                console.error("Encryption failed:", error);
+                outputDiv.textContent = "Error encrypting: " + error.message;
+            }
+        }
+
+        async function decryptText() {
+            const encryptedBase64 = document.getElementById('decryptInput').value;
+            const keyHex = document.getElementById('decryptionKeyInput').value;
+            const outputDiv = document.getElementById('decryptedOutput');
+
+            if (!encryptedBase64) {
+                outputDiv.textContent = "Please paste encrypted text to decrypt.";
+                return;
+            }
+
+            try {
+                const key = await getKeyFromHex(keyHex);
+
+                const combinedBuffer = base64ToArrayBuffer(encryptedBase64);
+                const iv = new Uint8Array(combinedBuffer.slice(0, 16)); // Extract IV (first 16 bytes)
+                const ciphertextWithTag = combinedBuffer.slice(16); // Remaining is ciphertext + tag
+
+                const decrypted = await crypto.subtle.decrypt(
+                    {
+                        name: "AES-GCM",
+                        iv: iv,
+                    },
+                    key,
+                    ciphertextWithTag
+                );
+
+                outputDiv.textContent = new TextDecoder().decode(decrypted);
+            } catch (error) {
+                console.error("Decryption failed:", error);
+                if (error.name === "OperationError" && error.message === "The operation failed for an operation-specific reason") {
+                    outputDiv.textContent = "Decryption failed. Check key or if data was tampered with (Authentication Tag mismatch).";
+                } else {
+                    outputDiv.textContent = "Error decrypting: " + error.message;
+                }
+            }
+        }
+    </script>
+</body>
+</html>
